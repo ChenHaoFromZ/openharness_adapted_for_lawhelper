@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 from contextlib import AsyncExitStack
 from typing import Any
+import logging
 
 import httpx
 from mcp import ClientSession, StdioServerParameters
@@ -20,6 +21,8 @@ from openharness.mcp.types import (
     McpStdioServerConfig,
     McpToolInfo,
 )
+
+log = logging.getLogger(__name__)
 
 
 class McpServerNotConnectedError(Exception):
@@ -78,8 +81,7 @@ class McpClientManager:
     async def close(self) -> None:
         """Close all active MCP sessions."""
         for stack in list(self._stacks.values()):
-            with contextlib.suppress(RuntimeError, asyncio.CancelledError):
-                await stack.aclose()
+            await _safe_stack_aclose(stack)
         self._stacks.clear()
         self._sessions.clear()
 
@@ -174,7 +176,7 @@ class McpClientManager:
                 auth_configured=bool(config.env),
             )
         except Exception as exc:
-            await stack.aclose()
+            await _safe_stack_aclose(stack)
             self._statuses[name] = McpConnectionStatus(
                 name=name,
                 state="failed",
@@ -201,7 +203,7 @@ class McpClientManager:
                 auth_configured=bool(config.headers),
             )
         except Exception as exc:
-            await stack.aclose()
+            await _safe_stack_aclose(stack)
             self._statuses[name] = McpConnectionStatus(
                 name=name,
                 state="failed",
@@ -257,3 +259,14 @@ class McpClientManager:
             tools=tools,
             resources=resources,
         )
+
+
+async def _safe_stack_aclose(stack: AsyncExitStack) -> None:
+    try:
+        await stack.aclose()
+    except (RuntimeError, asyncio.CancelledError) as exc:
+        message = str(exc)
+        if "different task than it was entered" in message:
+            log.warning("suppressing stdio MCP close_task_mismatch: %s", message)
+            return
+        raise

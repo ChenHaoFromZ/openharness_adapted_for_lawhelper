@@ -467,6 +467,13 @@ async def run_query(
         usage = UsageSnapshot()
 
         try:
+            log.warning(
+                "run_query_turn=%d model=%s api_client=%s tools=%d",
+                turn_count,
+                context.model,
+                type(context.api_client).__name__,
+                len(context.tool_registry.to_api_schema()),
+            )
             async for event in context.api_client.stream_message(
                 ApiMessageRequest(
                     model=context.model,
@@ -491,6 +498,12 @@ async def run_query(
                 if isinstance(event, ApiMessageCompleteEvent):
                     final_message = event.message
                     usage = event.usage
+                    log.warning(
+                        "run_query_message_complete stop_reason=%s tool_uses=%d text_len=%d",
+                        event.stop_reason,
+                        len(final_message.tool_uses),
+                        len(final_message.text),
+                    )
         except Exception as exc:
             error_msg = str(exc)
             if not reactive_compact_attempted and _is_prompt_too_long_error(exc):

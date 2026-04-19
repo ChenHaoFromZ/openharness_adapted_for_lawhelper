@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {Box, Text, useInput} from 'ink';
 import chalk from 'chalk';
 
@@ -6,6 +6,9 @@ import {useTheme} from '../theme/ThemeContext.js';
 import {Spinner} from './Spinner.js';
 
 const noop = (): void => {};
+const ESC_SEQ_START_FRAGMENT = /^[\[\]O0-9;:?<=>()#]$/;
+const ESC_SEQ_MIDDLE_FRAGMENT = /^[\[\]O0-9;:?<=>()#]+$/;
+const ESC_SEQ_END_FRAGMENT = /^[\[\]O0-9;:?<=>()#]*[A-Za-z~]$/;
 
 function MultilineTextInput({
 	value,
@@ -23,6 +26,8 @@ function MultilineTextInput({
 	promptColor: string;
 }): React.JSX.Element {
 	const [cursorOffset, setCursorOffset] = useState(value.length);
+	const escapePrimedRef = useRef(false);
+	const escapeSequenceActiveRef = useRef(false);
 
 	useEffect(() => {
 		setCursorOffset((previous) => Math.min(previous, value.length));
@@ -34,7 +39,34 @@ function MultilineTextInput({
 				return;
 			}
 
-			if (key.upArrow || key.downArrow || key.tab || (key.shift && key.tab) || key.escape || (key.ctrl && input === 'c')) {
+			if (key.escape) {
+				// Some terminals emit key sequences as ESC followed by fragments like
+				// "[", "1", ";", "5", "u". We prime a small state machine so those
+				// fragments don't get inserted as text (e.g. accidental "1").
+				escapePrimedRef.current = true;
+				escapeSequenceActiveRef.current = false;
+				return;
+			}
+
+			if (escapeSequenceActiveRef.current) {
+				if (ESC_SEQ_MIDDLE_FRAGMENT.test(input) || ESC_SEQ_END_FRAGMENT.test(input)) {
+					if (ESC_SEQ_END_FRAGMENT.test(input)) {
+						escapePrimedRef.current = false;
+						escapeSequenceActiveRef.current = false;
+					}
+					return;
+				}
+				escapePrimedRef.current = false;
+				escapeSequenceActiveRef.current = false;
+			} else if (escapePrimedRef.current) {
+				if (ESC_SEQ_START_FRAGMENT.test(input)) {
+					escapeSequenceActiveRef.current = true;
+					return;
+				}
+				escapePrimedRef.current = false;
+			}
+
+			if (key.upArrow || key.downArrow || key.tab || (key.shift && key.tab) || (key.ctrl && input === 'c')) {
 				return;
 			}
 
@@ -59,8 +91,12 @@ function MultilineTextInput({
 				return;
 			}
 
-			if (key.backspace || key.delete) {
-				if (key.delete) {
+			const isBackspace =
+				key.backspace || input === '\u0008' || input === '\u007f' || (key.ctrl && input.toLowerCase() === 'h');
+			const isDelete = key.delete || input === '\u001b[3~';
+
+			if (isBackspace || isDelete) {
+				if (isDelete) {
 					if (cursorOffset >= value.length) {
 						return;
 					}
@@ -79,6 +115,14 @@ function MultilineTextInput({
 			}
 
 			if (!input) {
+				return;
+			}
+			// Ignore raw control sequences that some terminals emit in raw mode.
+			if (/[\u0000-\u001f\u007f]/.test(input)) {
+				if (input.includes('\u001b')) {
+					escapePrimedRef.current = true;
+					escapeSequenceActiveRef.current = false;
+				}
 				return;
 			}
 

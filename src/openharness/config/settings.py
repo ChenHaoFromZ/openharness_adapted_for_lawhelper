@@ -19,7 +19,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from openharness.hooks.schemas import HookDefinition
-from openharness.mcp.types import McpServerConfig
+from openharness.mcp.types import McpHttpServerConfig, McpServerConfig, McpStdioServerConfig
 from openharness.permissions.modes import PermissionMode
 from openharness.utils.file_lock import exclusive_file_lock
 from openharness.utils.fs import atomic_write_text
@@ -835,6 +835,36 @@ def _apply_env_overrides(settings: Settings) -> Settings:
         )
     if sandbox_updates:
         updates["sandbox"] = settings.sandbox.model_copy(update=sandbox_updates)
+
+    # --- optional PKULaw MCP bootstrap (stdio via pkulaw-mcp-router) ---
+    pkulaw_config = (os.environ.get("PKULAW_MCP_CONFIG") or "").strip()
+    if pkulaw_config:
+        pkulaw_enabled = os.environ.get("PKULAW_MCP_ENABLED")
+        if pkulaw_enabled is None or _parse_bool_env(pkulaw_enabled):
+            server_name = (os.environ.get("PKULAW_MCP_SERVER_NAME") or "pkulaw").strip() or "pkulaw"
+            overwrite_raw = os.environ.get("PKULAW_MCP_OVERWRITE")
+            should_overwrite = overwrite_raw is not None and _parse_bool_env(overwrite_raw)
+            merged_servers = dict(settings.mcp_servers)
+
+            if should_overwrite or server_name not in merged_servers:
+                token = (os.environ.get("PKULAW_MCP_TOKEN") or "").strip()
+                env: dict[str, str] = {}
+                if token:
+                    env["PKULAW_MCP_TOKEN"] = token
+                command = (os.environ.get("PKULAW_MCP_COMMAND") or "npx").strip()
+                args_raw = (os.environ.get("PKULAW_MCP_ARGS") or "").strip()
+                if args_raw:
+                    import shlex
+                    mcp_args = shlex.split(args_raw)
+                else:
+                    mcp_args = ["-y", "pkulaw-mcp-router@latest", "serve", "--config", pkulaw_config]
+                merged_servers[server_name] = McpStdioServerConfig(
+                    type="stdio",
+                    command=command,
+                    args=mcp_args,
+                    env=env or None,
+                )
+                updates["mcp_servers"] = merged_servers
 
     if not updates:
         return settings

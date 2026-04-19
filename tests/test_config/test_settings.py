@@ -18,6 +18,7 @@ from openharness.config.settings import (
     strip_ansi_escape_sequences,
     _apply_env_overrides,
 )
+from openharness.mcp.types import McpHttpServerConfig, McpStdioServerConfig
 
 
 class TestSettings:
@@ -121,6 +122,62 @@ class TestSettings:
         path.write_text(json.dumps({}))
         s = load_settings(path)
         assert s.base_url == "https://anthropic-relay.example.com"
+
+    def test_pkulaw_env_bootstrap_adds_mcp_server(self, monkeypatch):
+        monkeypatch.setenv("PKULAW_MCP_CONFIG", "/path/to/config.toml")
+        monkeypatch.setenv("PKULAW_MCP_TOKEN", "token-123")
+        s = Settings()
+
+        updated = _apply_env_overrides(s)
+
+        assert "pkulaw" in updated.mcp_servers
+        server = updated.mcp_servers["pkulaw"]
+        assert isinstance(server, McpStdioServerConfig)
+        assert server.command == "npx"
+        assert "--config" in server.args
+        assert "/path/to/config.toml" in server.args
+        assert server.env["PKULAW_MCP_TOKEN"] == "token-123"
+
+    def test_pkulaw_env_bootstrap_does_not_override_existing_server(self, monkeypatch):
+        monkeypatch.setenv("PKULAW_MCP_CONFIG", "/path/to/new-config.toml")
+        s = Settings(
+            mcp_servers={
+                "pkulaw": McpHttpServerConfig(
+                    type="http",
+                    url="https://old.pkulaw.example.com/mcp",
+                    headers={"Authorization": "Bearer old-token"},
+                )
+            }
+        )
+
+        updated = _apply_env_overrides(s)
+
+        server = updated.mcp_servers["pkulaw"]
+        assert isinstance(server, McpHttpServerConfig)
+        assert server.url == "https://old.pkulaw.example.com/mcp"
+        assert server.headers["Authorization"] == "Bearer old-token"
+
+    def test_pkulaw_env_bootstrap_can_override_existing_server(self, monkeypatch):
+        monkeypatch.setenv("PKULAW_MCP_CONFIG", "/path/to/new-config.toml")
+        monkeypatch.setenv("PKULAW_MCP_TOKEN", "new-token")
+        monkeypatch.setenv("PKULAW_MCP_OVERWRITE", "true")
+        s = Settings(
+            mcp_servers={
+                "pkulaw": McpHttpServerConfig(
+                    type="http",
+                    url="https://old.pkulaw.example.com/mcp",
+                    headers={"Authorization": "Bearer old-token"},
+                )
+            }
+        )
+
+        updated = _apply_env_overrides(s)
+
+        server = updated.mcp_servers["pkulaw"]
+        assert isinstance(server, McpStdioServerConfig)
+        assert server.command == "npx"
+        assert "/path/to/new-config.toml" in server.args
+        assert server.env["PKULAW_MCP_TOKEN"] == "new-token"
 
 
 class TestLoadSaveSettings:

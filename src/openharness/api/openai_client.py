@@ -284,8 +284,20 @@ class OpenAICompatibleClient:
             "stream_options": {"include_usage": True},
         }
         params.update(_token_limit_param_for_model(request.model, request.max_tokens))
+        log.warning(
+            "openai_stream_once model=%s messages=%d request_tools=%d openai_tools=%d",
+            request.model,
+            len(openai_messages),
+            len(request.tools) if request.tools else 0,
+            len(openai_tools) if openai_tools else 0,
+        )
         if openai_tools:
             params["tools"] = openai_tools
+            params["tool_choice"] = "auto"
+            log.warning(
+                "openai_stream_once tool_choice=auto tool_names=%s",
+                ", ".join(tool["function"]["name"] for tool in openai_tools[:12]),
+            )
             # Some providers (Kimi) error on empty reasoning_content in
             # tool-call follow-ups.  Omit the entire stream_options key if
             # tools are present – avoids triggering model-side thinking mode
@@ -315,6 +327,7 @@ class OpenAICompatibleClient:
 
             if chunk_finish:
                 finish_reason = chunk_finish
+                log.warning("openai_stream_chunk finish_reason=%s", finish_reason)
 
             # Accumulate reasoning_content from thinking models (not shown to user)
             reasoning_piece = getattr(delta, "reasoning_content", None) or ""
@@ -378,6 +391,14 @@ class OpenAICompatibleClient:
         # can replay it when the message is sent back to the API
         if collected_reasoning:
             final_message._reasoning = collected_reasoning  # type: ignore[attr-defined]
+
+        log.warning(
+            "openai_stream_complete finish_reason=%s tool_calls=%d text_len=%d reasoning_len=%d",
+            finish_reason,
+            len(collected_tool_calls),
+            len(collected_content),
+            len(collected_reasoning),
+        )
 
         yield ApiMessageCompleteEvent(
             message=final_message,
