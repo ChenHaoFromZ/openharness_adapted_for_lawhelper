@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from contextlib import AsyncExitStack
 from typing import Any
 import logging
@@ -264,7 +263,10 @@ class McpClientManager:
 async def _safe_stack_aclose(stack: AsyncExitStack) -> None:
     try:
         await stack.aclose()
-    except (RuntimeError, asyncio.CancelledError) as exc:
+    except asyncio.CancelledError as exc:
+        log.warning("suppressing CancelledError during MCP stack close: %s", exc)
+        return
+    except RuntimeError as exc:
         message = str(exc)
         if "different task than it was entered" in message:
             log.warning("suppressing stdio MCP close_task_mismatch: %s", message)
