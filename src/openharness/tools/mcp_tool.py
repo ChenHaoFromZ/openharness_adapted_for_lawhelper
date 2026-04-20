@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from pydantic import BaseModel, Field, create_model
@@ -9,6 +10,8 @@ from pydantic import BaseModel, Field, create_model
 from openharness.mcp.client import McpClientManager, McpServerNotConnectedError
 from openharness.mcp.types import McpToolInfo
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+
+log = logging.getLogger(__name__)
 
 
 class McpToolAdapter(BaseTool):
@@ -31,9 +34,41 @@ class McpToolAdapter(BaseTool):
                 self._tool_info.name,
                 arguments.model_dump(mode="json", exclude_none=True),
             )
+            return ToolResult(output=output)
+        except McpServerNotConnectedError as exc:
+            log.warning(
+                "mcp_tool_call_failed_reconnecting server=%s tool=%s error=%s",
+                self._tool_info.server_name,
+                self._tool_info.name,
+                exc,
+            )
+        # First call failed — reconnect once and retry
+        try:
+            await self._manager.reconnect_all()
+        except Exception as reconnect_exc:
+            log.warning(
+                "mcp_reconnect_failed server=%s error=%s",
+                self._tool_info.server_name,
+                reconnect_exc,
+            )
+            return ToolResult(
+                output=f"MCP server '{self._tool_info.server_name}' reconnect failed: {reconnect_exc}",
+                is_error=True,
+            )
+        try:
+            output = await self._manager.call_tool(
+                self._tool_info.server_name,
+                self._tool_info.name,
+                arguments.model_dump(mode="json", exclude_none=True),
+            )
+            log.warning(
+                "mcp_tool_call_retry_success server=%s tool=%s",
+                self._tool_info.server_name,
+                self._tool_info.name,
+            )
+            return ToolResult(output=output)
         except McpServerNotConnectedError as exc:
             return ToolResult(output=str(exc), is_error=True)
-        return ToolResult(output=output)
 
 
 _JSON_TYPE_MAP: dict[str, type] = {

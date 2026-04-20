@@ -51,6 +51,37 @@ MAX_TRACKED_ACTIVE_ARTIFACTS = 8
 MAX_TRACKED_VERIFIED_WORK = 10
 
 
+def _summarize_tool_input_for_log(tool_name: str, tool_input: dict[str, object]) -> str:
+    if tool_name == "skill":
+        skill_name = str(tool_input.get("name") or "").strip()
+        return f"name={skill_name or '<empty>'}"
+
+    keys = sorted(tool_input.keys())
+    if not keys:
+        return "<empty>"
+
+    preview_parts: list[str] = []
+    for key in keys[:6]:
+        value = tool_input.get(key)
+        text = str(value).replace("\n", " ").strip()
+        if len(text) > 80:
+            text = f"{text[:77]}..."
+        preview_parts.append(f"{key}={text}")
+
+    if len(keys) > 6:
+        preview_parts.append(f"...+{len(keys) - 6} keys")
+    return ", ".join(preview_parts)
+
+
+def _summarize_tool_output_for_log(output: str) -> str:
+    text = (output or "").replace("\n", " ").strip()
+    if not text:
+        return "<empty>"
+    if len(text) > 120:
+        return f"{text[:117]}..."
+    return text
+
+
 def _is_prompt_too_long_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(
@@ -623,11 +654,16 @@ async def _execute_tool_call(
                 is_error=True,
             )
 
-    log.debug("tool_call start: %s id=%s", tool_name, tool_use_id)
+    log.warning(
+        "tool_execute_start name=%s id=%s input=%s",
+        tool_name,
+        tool_use_id,
+        _summarize_tool_input_for_log(tool_name, tool_input),
+    )
 
     tool = context.tool_registry.get(tool_name)
     if tool is None:
-        log.warning("unknown tool: %s", tool_name)
+        log.warning("tool_execute_unknown name=%s id=%s", tool_name, tool_use_id)
         return ToolResultBlock(
             tool_use_id=tool_use_id,
             content=f"Unknown tool: {tool_name}",
@@ -637,7 +673,7 @@ async def _execute_tool_call(
     try:
         parsed_input = tool.input_model.model_validate(tool_input)
     except Exception as exc:
-        log.warning("invalid input for %s: %s", tool_name, exc)
+        log.warning("tool_execute_invalid_input name=%s id=%s error=%s", tool_name, tool_use_id, exc)
         return ToolResultBlock(
             tool_use_id=tool_use_id,
             content=f"Invalid input for {tool_name}: {exc}",
@@ -676,7 +712,6 @@ async def _execute_tool_call(
                 is_error=True,
             )
 
-    log.debug("executing %s ...", tool_name)
     t0 = time.monotonic()
     result = await tool.execute(
         parsed_input,
@@ -690,8 +725,15 @@ async def _execute_tool_call(
         ),
     )
     elapsed = time.monotonic() - t0
-    log.debug("executed %s in %.2fs err=%s output_len=%d",
-              tool_name, elapsed, result.is_error, len(result.output or ""))
+    log.warning(
+        "tool_execute_complete name=%s id=%s elapsed_ms=%d err=%s output_len=%d output=%s",
+        tool_name,
+        tool_use_id,
+        int(elapsed * 1000),
+        result.is_error,
+        len(result.output or ""),
+        _summarize_tool_output_for_log(result.output or ""),
+    )
     tool_result = ToolResultBlock(
         tool_use_id=tool_use_id,
         content=result.output,
